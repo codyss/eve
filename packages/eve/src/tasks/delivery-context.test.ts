@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionStateMap } from "#harness/types.js";
 import { EMPTY_DELIVERY_SENTINEL } from "#shared/empty-delivery.js";
 import {
+  isBackgroundTaskDelivery,
   resolveInitiatingTaskContext,
   resolveTaskDeliveryContext,
   TASK_DELIVERY_CONTEXT_LABEL,
@@ -64,6 +65,21 @@ describe("task delivery instructions", () => {
     );
     expect(TASK_DELIVERY_SETTLED_INSTRUCTION).toContain("one user-facing response");
     expect(TASK_DELIVERY_SETTLED_INSTRUCTION).not.toContain("When no task");
+  });
+});
+
+describe("isBackgroundTaskDelivery", () => {
+  it("recognizes task-owned deliveries independently of their payload", () => {
+    expect(
+      isBackgroundTaskDelivery({
+        kind: "deliver",
+        payloads: [{ message: "Background task task_1 completed." }],
+        taskDeliveryId: "task_1:ready:completed",
+      }),
+    ).toBe(true);
+    expect(isBackgroundTaskDelivery({ kind: "deliver", payloads: [{ message: "Hello." }] })).toBe(
+      false,
+    );
   });
 });
 

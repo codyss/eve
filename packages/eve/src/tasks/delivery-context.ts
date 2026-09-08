@@ -1,3 +1,4 @@
+import type { DeliverHookPayload } from "#channel/types.js";
 import type { SessionStateMap } from "#harness/types.js";
 import { EMPTY_DELIVERY_SENTINEL } from "#shared/empty-delivery.js";
 import { getSessionTaskIndex, type SessionTaskIndexEntry } from "#tasks/session-index.js";
@@ -28,6 +29,17 @@ Incorrect: "Still waiting for the remaining task."
 Correct: ${EMPTY_DELIVERY_SENTINEL}`;
 
 export const TASK_DELIVERY_SETTLED_INSTRUCTION = `Background task reporting\nThis turn was triggered by background task activity. The accompanying ${TASK_DELIVERY_CONTEXT_LABEL} message is runtime-authored and lists tasks started by the same parent turn, all settled, with every available terminal output. Do not reply with ${EMPTY_DELIVERY_SENTINEL}. Send one user-facing response that combines their useful results.`;
+
+type BackgroundTaskDelivery = DeliverHookPayload & {
+  readonly taskDeliveryId: string;
+};
+
+/** True when a delivery was emitted by a background task. */
+export function isBackgroundTaskDelivery(
+  delivery: DeliverHookPayload,
+): delivery is BackgroundTaskDelivery {
+  return delivery.taskDeliveryId !== undefined;
+}
 
 /** Returns model context and cohort phase for tasks started by the same parent turn as this delivery. */
 export function resolveTaskDeliveryContext(input: {

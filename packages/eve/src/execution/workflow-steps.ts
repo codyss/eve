@@ -51,7 +51,7 @@ import { setChannelContext } from "#execution/channel-context.js";
 import { observeSessionActivity } from "#execution/session-activity-projection.js";
 import { hasPendingInputBatch } from "#harness/input-requests.js";
 import { activeTurnId } from "#harness/active-turn-id.js";
-import { coalesceTurnInputs } from "#harness/messages.js";
+import { coalesceTurnInputs, markFrameworkStepInput } from "#harness/messages.js";
 import { getWorkflowTaskCallIds, isWorkflowTaskInterrupt } from "#harness/workflow-task-state.js";
 import { getPendingWorkflowInterrupt } from "#harness/workflow-interrupt-state.js";
 import type { HandleEventFn, HarnessSession, StepInput, StepResult } from "#harness/types.js";
@@ -80,6 +80,7 @@ import { createDurableSessionState, readDurableSession } from "#execution/durabl
 import type { TurnStepInput } from "#execution/durable-session-migrations/turn-workflow.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
 import {
+  isBackgroundTaskDelivery,
   resolveInitiatingTaskContext,
   resolveTaskDeliveryContext,
 } from "#tasks/delivery-context.js";
@@ -182,6 +183,10 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   if (input.input?.kind === "deliver" && input.input.auth !== undefined) {
     ctx.set(AuthKey, input.input.auth ?? null);
   }
+  const backgroundTaskDelivery =
+    input.input?.kind === "deliver" && isBackgroundTaskDelivery(input.input)
+      ? input.input
+      : undefined;
 
   const initialSession = hydrateDurableSession({
     compactionOverrides: {
@@ -251,7 +256,11 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
           : defaultDeliverResult(payload);
 
         if (result !== undefined && result !== null) {
-          results.push(result);
+          results.push(
+            backgroundTaskDelivery !== undefined && result.message !== undefined
+              ? markFrameworkStepInput(result, "execution.background_task")
+              : result,
+          );
         }
       }
     } catch (error) {
@@ -266,14 +275,10 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     resolved = { runtimeActionResults: input.input.results };
   }
 
-  if (
-    resolved !== undefined &&
-    rawInput.input?.kind === "deliver" &&
-    rawInput.input.taskDeliveryId !== undefined
-  ) {
+  if (resolved !== undefined && backgroundTaskDelivery !== undefined) {
     const taskContext = resolveTaskDeliveryContext({
       state: durableSession.state,
-      taskDeliveryId: rawInput.input.taskDeliveryId,
+      taskDeliveryId: backgroundTaskDelivery.taskDeliveryId,
     });
     if (taskContext !== undefined) {
       ctx.set(TurnTaskDeliveryKey, taskContext.phase);
