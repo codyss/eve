@@ -285,6 +285,7 @@ export class MicrosandboxVm {
     this.#metadataPath = path;
     this.#optionsHash = optionsHash;
     await writeSessionMetadata(path, {
+      image: this.#input.options.image,
       networkPolicy: this.#networkPolicy,
       optionsHash,
       sandboxName: this.#sandboxName,
@@ -613,6 +614,10 @@ async function createMicrosandbox(input: {
     builder = builder.fromSnapshot(input.fromSnapshot);
   } else {
     builder = builder.image(input.options.image);
+  }
+
+  if (input.options.image.startsWith("127.0.0.1:")) {
+    builder = builder.registry((registry) => registry.insecure());
   }
 
   if (input.user !== undefined) {

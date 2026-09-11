@@ -25,6 +25,7 @@ import {
   touchDockerTemplateMarker,
 } from "#execution/sandbox/bindings/docker-templates.js";
 import { expectDockerSuccess } from "#execution/sandbox/bindings/docker-utils.js";
+import { buildSandboxDockerfile, dockerfileImageReference } from "#execution/sandbox/dockerfile.js";
 import { writeSandboxSeedFiles } from "#execution/sandbox/bindings/local-backend-utils.js";
 import { createLoggingSandboxSession } from "#execution/sandbox/logging-session.js";
 import { buildSandboxSession } from "#execution/sandbox/session.js";
@@ -111,15 +112,29 @@ export function createDockerSandboxBackend(
         return { reused: true };
       }
 
-      prewarmInput.log?.(`checking base image "${options.image}"`);
-      await ensureDockerBaseImage(cli, options);
+      let baseImage = options.image;
+      if (prewarmInput.dockerfile === undefined) {
+        prewarmInput.log?.(`checking base image "${options.image}"`);
+        await ensureDockerBaseImage(cli, options);
+      } else {
+        baseImage = dockerfileImageReference({
+          dockerfile: prewarmInput.dockerfile,
+          templateKey: prewarmInput.templateKey,
+        });
+        prewarmInput.log?.(`building sandbox Dockerfile "${prewarmInput.dockerfile.path}"`);
+        await buildSandboxDockerfile({
+          cli,
+          dockerfile: prewarmInput.dockerfile,
+          imageReference: baseImage,
+        });
+      }
 
       const buildContainerName = `${prewarmInput.templateKey}-build-${randomUUID().slice(0, 8)}`;
       prewarmInput.log?.("starting template build container");
       await startDockerContainer({
         cli,
         containerName: buildContainerName,
-        image: options.image,
+        image: baseImage,
         initialNetworkPolicy: "allow-all",
         options,
         role: "template-build",

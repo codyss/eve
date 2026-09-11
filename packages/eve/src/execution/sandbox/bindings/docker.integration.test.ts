@@ -176,6 +176,41 @@ describe("createDockerSandboxBackend prewarm", () => {
     ).resolves.toContain(TEMPLATE_IMAGE);
   });
 
+  it("uses a colocated Dockerfile as the template base image", async () => {
+    const appRoot = await createScratchDirectory("eve-docker-sandbox-");
+    const { calls, cli } = createFakeDockerCli((args) => {
+      if (isImageInspect(args, TEMPLATE_IMAGE)) {
+        return { exitCode: 1, stderr: "No such image" };
+      }
+      return undefined;
+    });
+    const dockerfile = {
+      contentHash: "dockerfile-hash",
+      contextPath: "/app/agent/sandbox",
+      path: "/app/agent/sandbox/Dockerfile",
+    };
+
+    await createEngine({ cli }).prewarm({
+      dockerfile,
+      runtimeContext: { appRoot },
+      seedFiles: [],
+      templateKey: TEMPLATE_KEY,
+    });
+
+    expect(findCall(calls, (args) => args[0] === "build")?.args).toEqual([
+      "build",
+      "--file",
+      dockerfile.path,
+      "--tag",
+      expect.stringMatching(/^eve-sandbox-dockerfile:/),
+      dockerfile.contextPath,
+    ]);
+    expect(findCall(calls, (args) => args[0] === "pull")).toBeUndefined();
+    expect(findCall(calls, (args) => args[0] === "run")?.args).toContainEqual(
+      expect.stringMatching(/^eve-sandbox-dockerfile:/),
+    );
+  });
+
   it("builds, seeds, commits, and cleans up when the template image is missing", async () => {
     const appRoot = await createScratchDirectory("eve-docker-sandbox-");
     const { calls, cli } = createFakeDockerCli((args) => {

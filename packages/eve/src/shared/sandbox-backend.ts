@@ -59,6 +59,13 @@ export interface SandboxSeedFile {
   readonly content: string | Buffer;
 }
 
+/** Colocated `agent/sandbox/Dockerfile` prepared before live sessions start. */
+export interface SandboxDockerfileInput {
+  readonly contextPath: string;
+  readonly contentHash: string;
+  readonly path: string;
+}
+
 /**
  * Diagnostic tags attached to provider-owned sandbox resources.
  *
@@ -117,6 +124,7 @@ export interface SandboxBackendCreateInput {
 export interface SandboxBackendPrewarmInput<BO = Record<string, never>> {
   readonly templateKey: string;
   readonly bootstrap?: (input: SandboxBootstrapContext<BO>) => void | Promise<void>;
+  readonly dockerfile?: SandboxDockerfileInput;
   /**
    * Optional progress logger for backend-specific prewarm phases.
    */

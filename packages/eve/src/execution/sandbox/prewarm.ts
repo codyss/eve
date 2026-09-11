@@ -28,6 +28,7 @@ import type { RuntimeRegisteredSandbox } from "#runtime/sandbox/registry.js";
 import { createRuntimeSandboxTemplatePlan } from "#runtime/sandbox/template-plan.js";
 import { materializeWorkspaceDirectory } from "#runtime/workspace/seed-files.js";
 import { toErrorMessage } from "#shared/errors.js";
+import { resolveSandboxDockerfile } from "./dockerfile.js";
 import { withSandboxTemplatePrewarmLock } from "./template-prewarm-lock.js";
 
 interface PrewarmTarget {
@@ -38,6 +39,7 @@ interface PrewarmTarget {
 }
 
 interface NodeSandbox extends RuntimeRegisteredSandbox {
+  readonly agentRoot?: string;
   readonly nodeId: string;
 }
 
@@ -249,38 +251,44 @@ async function collectPrewarmTargets(input: {
   const targets: PrewarmTarget[] = [];
 
   await Promise.all(
-    collectNodeSandboxes(input.graph).map(async ({ definition, nodeId, workspaceResourceRoot }) => {
-      const templatePlan = createRuntimeSandboxTemplatePlan({
-        definition,
-        workspaceResourceRoot,
-      });
-      const templateKey = await createRuntimeSandboxTemplateKey({
-        backendName: definition.backend.name,
-        compiledArtifactsSource: input.compiledArtifactsSource,
-        nodeId,
-        sourceId: definition.sourceId,
-        templatePlan,
-      });
+    collectNodeSandboxes(input.graph).map(
+      async ({ agentRoot, definition, nodeId, workspaceResourceRoot }) => {
+        const dockerfile =
+          agentRoot === undefined ? undefined : await resolveSandboxDockerfile(agentRoot);
+        const templatePlan = createRuntimeSandboxTemplatePlan({
+          definition,
+          dockerfile,
+          workspaceResourceRoot,
+        });
+        const templateKey = await createRuntimeSandboxTemplateKey({
+          backendName: definition.backend.name,
+          compiledArtifactsSource: input.compiledArtifactsSource,
+          nodeId,
+          sourceId: definition.sourceId,
+          templatePlan,
+        });
 
-      if (templateKey === null) {
-        return;
-      }
+        if (templateKey === null) {
+          return;
+        }
 
-      targets.push({
-        backend: definition.backend,
-        label: formatLabel(nodeId),
-        input: {
-          bootstrap: definition.bootstrap,
-          seedFiles: await loadResourceRootSeedFiles({
-            compileDirectoryPath: input.compileDirectoryPath,
-            workspaceResourceRoot,
-          }),
-          runtimeContext,
-          templateKey,
-        },
-        signature: `${definition.backend.name}:${nodeId}:${templateKey}`,
-      });
-    }),
+        targets.push({
+          backend: definition.backend,
+          label: formatLabel(nodeId),
+          input: {
+            bootstrap: definition.bootstrap,
+            dockerfile,
+            seedFiles: await loadResourceRootSeedFiles({
+              compileDirectoryPath: input.compileDirectoryPath,
+              workspaceResourceRoot,
+            }),
+            runtimeContext,
+            templateKey,
+          },
+          signature: `${definition.backend.name}:${nodeId}:${templateKey}`,
+        });
+      },
+    ),
   );
 
   // Template keys factor in nodeId (see runtime/sandbox/keys.ts), so each
@@ -333,7 +341,9 @@ async function loadGraphFromArtifacts(input: {
 function collectNodeSandboxes(graph: ResolvedAgentGraphBundle): readonly NodeSandbox[] {
   return [...graph.nodesByNodeId.entries()].flatMap(([nodeId, node]) => {
     const registered = node.sandboxRegistry.sandbox;
-    return registered.definition.inheritsParent === true ? [] : [{ ...registered, nodeId }];
+    return registered.definition.inheritsParent === true
+      ? []
+      : [{ ...registered, agentRoot: node.agent?.metadata.agentRoot, nodeId }];
   });
 }
 

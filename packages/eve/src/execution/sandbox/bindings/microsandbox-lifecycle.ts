@@ -1,4 +1,14 @@
 import { randomUUID } from "node:crypto";
+
+import {
+  assertDockerDaemonAvailable,
+  createDockerCli,
+} from "#execution/sandbox/bindings/docker-cli.js";
+import {
+  buildSandboxDockerfile,
+  dockerfileImageReference,
+  publishDockerImageForMicrosandbox,
+} from "#execution/sandbox/dockerfile.js";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -99,13 +109,32 @@ export async function prewarmMicrosandboxTemplate(input: {
   await rm(temporaryTemplateRootPath, { force: true, recursive: true });
   await mkdir(temporaryTemplateRootPath, { recursive: true });
 
-  input.prewarmInput.log?.(`creating template VM from image "${input.options.image}"`);
+  let templateOptions = input.options;
+  if (input.prewarmInput.dockerfile !== undefined) {
+    const cli = createDockerCli();
+    await assertDockerDaemonAvailable(cli);
+    const imageReference = dockerfileImageReference({
+      dockerfile: input.prewarmInput.dockerfile,
+      templateKey: input.prewarmInput.templateKey,
+    });
+    input.prewarmInput.log?.(`building sandbox Dockerfile "${input.prewarmInput.dockerfile.path}"`);
+    await buildSandboxDockerfile({
+      cli,
+      dockerfile: input.prewarmInput.dockerfile,
+      imageReference,
+    });
+    input.prewarmInput.log?.("publishing Dockerfile image for microsandbox");
+    const publishedImage = await publishDockerImageForMicrosandbox({ cli, imageReference });
+    templateOptions = { ...input.options, image: publishedImage, pullPolicy: "always" };
+  }
+
+  input.prewarmInput.log?.(`creating template VM from image "${templateOptions.image}"`);
   const templateSandbox = await createPreparedMicrosandbox({
     log: input.prewarmInput.log,
     module,
     name: temporarySandboxName,
-    networkPolicy: input.options.networkPolicy,
-    options: input.options,
+    networkPolicy: templateOptions.networkPolicy,
+    options: templateOptions,
     sessionKey: input.prewarmInput.templateKey,
     setupBaseRuntime: true,
     tags: undefined,
@@ -141,6 +170,7 @@ export async function prewarmMicrosandboxTemplate(input: {
     input.prewarmInput.log?.("snapshotting template VM");
     await templateSandbox.stopAndSnapshot(snapshotName);
     await writeTemplateMetadata(resolveMicrosandboxMetadataPath(temporaryTemplateRootPath), {
+      image: input.prewarmInput.dockerfile === undefined ? undefined : templateOptions.image,
       optionsHash: input.optionsHash,
       snapshotName,
       version: MICROSANDBOX_METADATA_VERSION,
@@ -170,11 +200,31 @@ export async function createMicrosandboxHandle(input: {
   readonly options: ResolvedMicrosandboxOptions;
   readonly optionsHash: string;
 }): Promise<SandboxBackendHandle<MicrosandboxSessionUseOptions>> {
+  const cacheDirectory = resolveSandboxCacheDirectory(input.createInput.runtimeContext.appRoot);
+  const templateMetadata =
+    input.createInput.templateKey === null
+      ? null
+      : await readTemplateMetadata(
+          resolveMicrosandboxMetadataPath(
+            resolveMicrosandboxTemplateRootPath(cacheDirectory, input.createInput.templateKey),
+          ),
+        );
+  const existingMetadata =
+    readSessionMetadataRecord(input.createInput.existingMetadata) ??
+    (await readSessionMetadata(
+      resolveMicrosandboxMetadataPath(
+        resolveMicrosandboxSessionRootPath(cacheDirectory, input.createInput.sessionKey),
+      ),
+    ));
+  const image = existingMetadata?.image ?? templateMetadata?.image;
+  const options =
+    image === undefined
+      ? input.options
+      : { ...input.options, image, pullPolicy: "always" as const };
   const module = await loadMicrosandboxModule({
     appRoot: input.createInput.runtimeContext.appRoot,
-    options: input.options,
+    options,
   });
-  const cacheDirectory = resolveSandboxCacheDirectory(input.createInput.runtimeContext.appRoot);
   const sessionRootPath = resolveMicrosandboxSessionRootPath(
     cacheDirectory,
     input.createInput.sessionKey,
@@ -186,9 +236,6 @@ export async function createMicrosandboxHandle(input: {
   }
 
   const metadataPath = resolveMicrosandboxMetadataPath(sessionRootPath);
-  const existingMetadata =
-    readSessionMetadataRecord(input.createInput.existingMetadata) ??
-    (await readSessionMetadata(metadataPath));
   const sessionTags = withDevelopmentSandboxMetadataPathTag(input.createInput.tags, metadataPath);
 
   if (
@@ -201,7 +248,7 @@ export async function createMicrosandboxHandle(input: {
       metadata: existingMetadata,
       metadataPath,
       module,
-      options: input.options,
+      options,
       sessionKey: input.createInput.sessionKey,
       tags: sessionTags,
     });
@@ -217,14 +264,6 @@ export async function createMicrosandboxHandle(input: {
 
   let snapshotName: string | null = null;
   if (input.createInput.templateKey !== null) {
-    const templateRootPath = resolveMicrosandboxTemplateRootPath(
-      cacheDirectory,
-      input.createInput.templateKey,
-    );
-    const templateMetadata = await readTemplateMetadata(
-      resolveMicrosandboxMetadataPath(templateRootPath),
-    );
-
     if (
       templateMetadata === null ||
       templateMetadata.optionsHash !== input.optionsHash ||
@@ -249,8 +288,8 @@ export async function createMicrosandboxHandle(input: {
       fromSnapshot: snapshotName ?? undefined,
       module,
       name: sandboxName,
-      networkPolicy: input.options.networkPolicy,
-      options: input.options,
+      networkPolicy: options.networkPolicy,
+      options,
       sessionKey: input.createInput.sessionKey,
       setupBaseRuntime: snapshotName === null,
       tags: sessionTags,

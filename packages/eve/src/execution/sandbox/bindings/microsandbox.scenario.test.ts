@@ -10,6 +10,7 @@ import {
   pruneMicrosandboxTemplates,
 } from "#execution/sandbox/bindings/microsandbox.js";
 import { isMicrosandboxPlatformSupported } from "#execution/sandbox/bindings/microsandbox-platform.js";
+import { resolveSandboxDockerfile } from "#execution/sandbox/dockerfile.js";
 
 // Microsandbox is unsupported on Windows (native bindings ship for
 // macOS Apple Silicon and glibc Linux only), so every suite in this
@@ -68,6 +69,38 @@ async function collectStream(stream: ReadableStream<Uint8Array>): Promise<string
 }
 
 describe.runIf(runMicrosandboxVmScenarios)("microsandbox sandbox file API", () => {
+  it("prewarms from a colocated Dockerfile", async () => {
+    const appRoot = await createTemporaryCacheDirectory("dockerfile");
+    const agentRoot = join(appRoot, "agent");
+    const sandboxRoot = join(agentRoot, "sandbox");
+    await mkdir(sandboxRoot, { recursive: true });
+    await writeFile(
+      join(sandboxRoot, "Dockerfile"),
+      [
+        "FROM ubuntu:24.04",
+        "RUN apt-get update && apt-get install -y bash sudo",
+        "RUN printf dockerfile-ready > /dockerfile-marker",
+        "",
+      ].join("\n"),
+    );
+    const dockerfile = await resolveSandboxDockerfile(agentRoot);
+    const backend = createMicrosandboxSandboxBackend();
+    await backend.prewarm({
+      dockerfile,
+      runtimeContext: { appRoot },
+      seedFiles: [],
+      templateKey: "tpl-dockerfile",
+    });
+    const handle = await backend.create({
+      runtimeContext: { appRoot },
+      sessionKey: "session-dockerfile",
+      templateKey: "tpl-dockerfile",
+    });
+
+    const result = await handle.session.run({ command: "cat /dockerfile-marker" });
+    expect(result).toMatchObject({ exitCode: 0, stdout: "dockerfile-ready" });
+  });
+
   it("writes a file via the public session and reads it back", async () => {
     const appRoot = await createTemporaryCacheDirectory("file-api");
     const handle = await createPrewarmedHandle({

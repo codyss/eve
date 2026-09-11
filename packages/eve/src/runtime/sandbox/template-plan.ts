@@ -1,4 +1,5 @@
 import type { CompiledWorkspaceResourceRoot } from "#compiler/manifest.js";
+import type { SandboxDockerfile } from "#execution/sandbox/dockerfile.js";
 import type { ResolvedSandboxDefinition } from "#runtime/types.js";
 
 /**
@@ -15,9 +16,15 @@ export type RuntimeSandboxTemplatePlan =
     }
   | {
       readonly contentHash?: string;
+      readonly dockerfileHash?: string;
       readonly kind: "bootstrap";
       readonly revalidationKey?: string;
       readonly sourceHash: string;
+    }
+  | {
+      readonly contentHash?: string;
+      readonly dockerfileHash: string;
+      readonly kind: "dockerfile";
     };
 
 /**
@@ -25,6 +32,7 @@ export type RuntimeSandboxTemplatePlan =
  */
 export function createRuntimeSandboxTemplatePlan(input: {
   readonly definition: ResolvedSandboxDefinition;
+  readonly dockerfile?: SandboxDockerfile;
   readonly workspaceResourceRoot: CompiledWorkspaceResourceRoot;
 }): RuntimeSandboxTemplatePlan {
   if (input.definition.bootstrap !== undefined) {
@@ -36,9 +44,18 @@ export function createRuntimeSandboxTemplatePlan(input: {
 
     return {
       contentHash: input.workspaceResourceRoot.contentHash,
+      dockerfileHash: input.dockerfile?.contentHash,
       kind: "bootstrap",
       revalidationKey: input.definition.revalidationKey,
       sourceHash: input.definition.sourceHash,
+    };
+  }
+
+  if (input.dockerfile !== undefined) {
+    return {
+      contentHash: input.workspaceResourceRoot.contentHash,
+      dockerfileHash: input.dockerfile.contentHash,
+      kind: "dockerfile",
     };
   }
 

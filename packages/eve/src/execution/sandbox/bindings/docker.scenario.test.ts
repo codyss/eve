@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +12,10 @@ import {
   resolveDockerSandboxOptions,
 } from "#execution/sandbox/bindings/docker-options.js";
 import { dockerTemplateImageReference } from "#execution/sandbox/bindings/docker-templates.js";
+import {
+  dockerfileImageReference,
+  resolveSandboxDockerfile,
+} from "#execution/sandbox/dockerfile.js";
 import { useTemporaryDirectories } from "#internal/testing/use-temporary-app-roots.js";
 
 // Real-daemon scenarios are opt-in: they pull images and create
@@ -47,6 +53,7 @@ describe.runIf(runDockerScenarios)("docker sandbox engine against a real daemon"
     templateKey,
   });
   const sessionKeys: string[] = [];
+  const extraImages: string[] = [];
   const cleanupCli = createDockerCli();
 
   function nextSessionKey(label: string): string {
@@ -63,8 +70,52 @@ describe.runIf(runDockerScenarios)("docker sandbox engine against a real daemon"
     for (const sessionKey of sessionKeys) {
       await cleanupCli.run(["rm", "-f", sessionKey]);
     }
-    await cleanupCli.run(["rmi", "-f", templateImageReference]);
+    await cleanupCli.run(["rmi", "-f", templateImageReference, ...extraImages]);
   }, 60_000);
+
+  it(
+    "builds a colocated Dockerfile before prewarming the template",
+    async () => {
+      const appRoot = await createScratchDirectory("eve-dockerfile-scenario-");
+      const agentRoot = join(appRoot, "agent");
+      const sandboxRoot = join(agentRoot, "sandbox");
+      await mkdir(sandboxRoot, { recursive: true });
+      await writeFile(
+        join(sandboxRoot, "Dockerfile"),
+        `FROM ${TEST_IMAGE}\nUSER root\nRUN printf dockerfile-ready > /dockerfile-marker\nUSER vercel-sandbox\n`,
+      );
+      const dockerfile = await resolveSandboxDockerfile(agentRoot);
+      expect(dockerfile).toBeDefined();
+      const dockerfileTemplateKey = `${templateKey}-dockerfile`;
+      const dockerfileTemplateImage = dockerTemplateImageReference({
+        optionsHash: createDockerSandboxOptionsHash(
+          resolveDockerSandboxOptions({ image: TEST_IMAGE }),
+        ),
+        templateKey: dockerfileTemplateKey,
+      });
+      extraImages.push(
+        dockerfileTemplateImage,
+        dockerfileImageReference({ dockerfile: dockerfile!, templateKey: dockerfileTemplateKey }),
+      );
+
+      const engine = createEngine();
+      await engine.prewarm({
+        dockerfile,
+        runtimeContext: { appRoot },
+        seedFiles: [],
+        templateKey: dockerfileTemplateKey,
+      });
+      const handle = await engine.create({
+        runtimeContext: { appRoot },
+        sessionKey: nextSessionKey("dockerfile"),
+        templateKey: dockerfileTemplateKey,
+      });
+
+      const result = await handle.session.run({ command: "cat /dockerfile-marker" });
+      expect(result).toMatchObject({ exitCode: 0, stdout: "dockerfile-ready" });
+    },
+    5 * 60_000,
+  );
 
   it(
     "prewarms a template with seed files and opens a session from it",

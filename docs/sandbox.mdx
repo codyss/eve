@@ -85,10 +85,11 @@ remote URLs and legacy AI SDK `image` parts are not staged.
 
 ## Seeding `/workspace`
 
-Mount authored files into the sandbox at session start by placing them under `agent/sandbox/workspace/`. This requires the folder layout (`agent/sandbox/sandbox.ts`), not the top-level shorthand:
+Mount authored files into the sandbox at session start by placing them under `agent/sandbox/workspace/`:
 
 ```text
 agent/sandbox/
+  Dockerfile                ← optional environment image for Docker and microsandbox
   sandbox.ts                ← optional override (see below)
   workspace/
     schema.sql              ← lands at /workspace/schema.sql
@@ -99,10 +100,12 @@ Every file under `workspace/` mirrors into the sandbox cwd with its structure in
 
 ## Overriding the sandbox
 
-To add setup, seed files, or pick a backend, author `defineSandbox`. There are two layouts:
+To add setup or pick a backend, author `defineSandbox`. There are two layouts:
 
-- `agent/sandbox.ts`: shorthand. Use it when you need only a definition, no seeded files.
-- `agent/sandbox/sandbox.ts`: folder layout. Use it when you also seed `agent/sandbox/workspace/**`. If both exist, the folder layout wins.
+- `agent/sandbox.ts`: shorthand for definitions without colocated sandbox files.
+- `agent/sandbox/sandbox.ts`: optional definition next to `Dockerfile` and `workspace/`. If both definition forms exist, the folder layout wins.
+
+A folder containing only `Dockerfile`, only `workspace/`, or both uses the default sandbox definition.
 
 ```ts title="agent/sandbox/sandbox.ts"
 import { defineSandbox } from "eve/sandbox";
@@ -188,11 +191,11 @@ export default defineSandbox({
 
 ### Docker
 
-`docker()` drives the Docker CLI directly. By default, it uses the `ghcr.io/vercel/eve` image tag matching the installed eve version. eve creates `/workspace` and verifies Bash during framework setup, before authored bootstrap code runs. Configure it through `docker({ image, env, pullPolicy, networkPolicy })`, and install authored runtime tools in sandbox bootstrap or provide them through a custom image. Templates are committed as local Docker images and reused across sessions when the sandbox source, seed files, `revalidationKey`, and Docker backend options still match. Sessions run as long-lived containers whose filesystems persist `/workspace` changes across turns for the same durable session. `eve dev` prunes stale template images in the background.
+`docker()` drives the Docker CLI directly. By default, it uses the `ghcr.io/vercel/eve` image tag matching the installed eve version. To build the environment from source, add `agent/sandbox/Dockerfile`; eve builds it using `agent/sandbox/` as the build context before writing workspace seeds and running optional bootstrap code. eve creates `/workspace` and verifies Bash during framework setup. Templates are committed as local Docker images and reused across sessions when their inputs still match. Sessions run as long-lived containers whose filesystems persist `/workspace` changes across turns for the same durable session. `eve dev` prunes stale template images in the background.
 
 ### microsandbox
 
-`microsandbox()` runs each sandbox in a lightweight local VM with snapshot-backed templates, a `vercel-sandbox` user, and a firewall capable of domain-level network policies and credential brokering. It is the closest local match to hosted Vercel Sandbox. By default, it uses the `ghcr.io/vercel/eve` image tag matching the installed eve version. During framework setup, before authored bootstrap code runs, eve verifies Bash and creates `/workspace` and the sandbox user. Install authored runtime tools in sandbox bootstrap or provide them through a custom image. Supported hosts are macOS on Apple Silicon, or Linux (glibc) with KVM. The `microsandbox` npm package and its VM runtime are not bundled with eve, so `eve dev` installs both automatically when missing (disable with `setup: { autoInstall: false }`); production processes fail with actionable install errors instead.
+`microsandbox()` runs each sandbox in a lightweight local VM with snapshot-backed templates, a `vercel-sandbox` user, and a firewall capable of domain-level network policies and credential brokering. It is the closest local match to hosted Vercel Sandbox. By default, it uses the `ghcr.io/vercel/eve` image tag matching the installed eve version. When `agent/sandbox/Dockerfile` exists, eve builds it with the local Docker daemon, publishes it through an eve-managed local registry, and uses that image to prepare the microsandbox template before writing workspace seeds and running optional bootstrap code. Supported hosts are macOS on Apple Silicon, or Linux (glibc) with KVM. Docker is additionally required when a Dockerfile is present. The `microsandbox` npm package and its VM runtime are not bundled with eve, so `eve dev` installs both automatically when missing (disable with `setup: { autoInstall: false }`); production processes fail with actionable install errors instead.
 
 ### just-bash
 
